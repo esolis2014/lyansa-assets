@@ -188,11 +188,11 @@ Write-Host "=== LAYER 5: Hardening NxProxy service ===" -ForegroundColor Green
 
 # Reset DACL to permissive default first (in case a previous run locked it)
 $defaultDacl = 'D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)'
-& sc.exe sdset $NxProxyServiceName $defaultDacl 2>$null | Out-Null
-Write-Host "  Service DACL reset to default"
+$resetResult = & sc.exe sdset $NxProxyServiceName $defaultDacl 2>&1
+Write-Host "  DACL reset: $resetResult"
 
-# Now configure startup and recovery while we have full access
-Set-Service -Name $NxProxyServiceName -StartupType Automatic
+# Configure startup type using sc.exe (avoids Set-Service permission issues)
+& sc.exe config $NxProxyServiceName start= auto | Out-Null
 Write-Host "  Startup type: Automatic"
 
 & sc.exe failure $NxProxyServiceName reset= 86400 actions= restart/5000/restart/5000/restart/10000 | Out-Null
