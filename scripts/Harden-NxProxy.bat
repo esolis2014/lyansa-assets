@@ -1,7 +1,6 @@
 @echo off
 setlocal
 
-:: Check for Administrator privileges
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Requesting Administrator privileges...
