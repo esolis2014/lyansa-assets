@@ -186,15 +186,17 @@ Write-Host "  Layer 4 complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "=== LAYER 5: Hardening NxProxy service ===" -ForegroundColor Green
 
+# Set startup type and failure recovery BEFORE locking down the DACL
+Set-Service -Name $NxProxyServiceName -StartupType Automatic
+Write-Host "  Startup type: Automatic"
+
 & sc.exe failure $NxProxyServiceName reset= 86400 actions= restart/5000/restart/5000/restart/10000 | Out-Null
 Write-Host "  Service recovery: restart at 5s / 5s / 10s"
 
+# Harden DACL last — this restricts future modifications to SYSTEM and Admins only
 $dacl = 'D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCLORC;;;IU)'
 & sc.exe sdset $NxProxyServiceName $dacl | Out-Null
 Write-Host "  Service DACL hardened: standard users can only query status"
-
-Set-Service -Name $NxProxyServiceName -StartupType Automatic
-Write-Host "  Startup type: Automatic"
 
 Write-Host "  Layer 5 complete." -ForegroundColor Green
 
