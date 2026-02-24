@@ -196,7 +196,19 @@ Write-Host "  DACL reset: $resetResult"
 Write-Host "  Startup type: Automatic"
 
 & sc.exe failure $NxProxyServiceName reset= 86400 actions= restart/5000/restart/5000/restart/10000 | Out-Null
-Write-Host "  Service recovery: restart at 5s / 5s / 10s"
+Write-Host "  Service recovery (SCM): restart at 5s / 5s / 10s on crash"
+
+# Configure NSSM to restart even on clean stops
+$nssmPath = $nxProxySvc.PathName
+if ($nssmPath -and (Test-Path ($nssmPath -replace '"',''))) {
+    $nssm = $nssmPath -replace '"',''
+    & "$nssm" set $NxProxyServiceName AppExit Default Restart 2>&1 | Out-Null
+    & "$nssm" set $NxProxyServiceName AppRestartDelay 5000 2>&1 | Out-Null
+    Write-Host "  Service recovery (NSSM): restart on any exit, 5s delay"
+} else {
+    Write-Warning "  NSSM executable not found at service path. NSSM restart not configured."
+    Write-Warning "  Manual config: nssm set NxProxy AppExit Default Restart"
+}
 
 # Lock DACL down last — restricts future modifications to SYSTEM and Admins only
 $dacl = 'D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCLORC;;;IU)'
