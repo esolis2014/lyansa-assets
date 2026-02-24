@@ -6,7 +6,7 @@
     Layer 1: Force DNS to 127.0.0.1 (NxProxy) on ALL NICs
     Layer 2: Lock DNS registry keys (admins exempt)
     Layer 3: Disable DoH in Chrome, Edge, Firefox, Opera + Windows
-    Layer 4: Windows Firewall - allow NxProxy, block all other DNS
+    Layer 4: Windows Firewall - block all user DNS, SYSTEM exempt
     Layer 5: NxProxy service resilience
     Layer 6: AppLocker - block unauthorized executables
 
@@ -40,7 +40,7 @@ if ($PSVersionTable.PSVersion.Major -lt 3) {
 }
 Write-Host "PowerShell version: $($PSVersionTable.PSVersion)" -ForegroundColor Cyan
 
-# --- Resolve NxProxy executable path ---
+# --- Verify NxProxy service exists ---
 $nxProxySvc = $null
 if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
     $nxProxySvc = Get-CimInstance Win32_Service -Filter "Name='$NxProxyServiceName'" -ErrorAction SilentlyContinue
@@ -52,20 +52,7 @@ if (-not $nxProxySvc) {
     Write-Error "Service '$NxProxyServiceName' not found. Install NxProxy first."
     exit 1
 }
-
-if ($nxProxySvc.PathName -match '^"([^"]+)"') {
-    $NxProxyExePath = $Matches[1]
-} elseif ($nxProxySvc.PathName -match '^(\S+)') {
-    $NxProxyExePath = $Matches[1]
-} else {
-    $NxProxyExePath = $nxProxySvc.PathName
-}
-
-if (-not (Test-Path $NxProxyExePath)) {
-    Write-Error "NxProxy executable not found at '$NxProxyExePath'."
-    exit 1
-}
-Write-Host "NxProxy executable: $NxProxyExePath" -ForegroundColor Cyan
+Write-Host "NxProxy service found: $($nxProxySvc.PathName)" -ForegroundColor Cyan
 Write-Host ""
 
 # =============================================================================
@@ -170,21 +157,23 @@ Write-Host "  Layer 3 complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "=== LAYER 4: Configuring firewall rules ===" -ForegroundColor Green
 
+# NxProxy runs as LocalSystem (S-1-5-18) via NSSM. LocalSystem is NOT a member
+# of BUILTIN\Users (S-1-5-32-545). By scoping block rules to BUILTIN\Users only,
+# NxProxy and all SYSTEM-level processes are automatically exempt.
+# No program-path allow rules needed — avoids path parsing issues entirely.
+
 $rulePrefix = "NxProxy-Hardening"
 Get-NetFirewallRule | Where-Object { $_.DisplayName -like "$rulePrefix*" } | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 
-# ALLOW NxProxy.exe outbound DNS
-New-NetFirewallRule -DisplayName "$rulePrefix - Allow NxProxy DNS (UDP)" -Direction Outbound -Action Allow -Protocol UDP -RemotePort 53 -Program $NxProxyExePath -Enabled True -Profile Any | Out-Null
-New-NetFirewallRule -DisplayName "$rulePrefix - Allow NxProxy DNS (TCP)" -Direction Outbound -Action Allow -Protocol TCP -RemotePort 53 -Program $NxProxyExePath -Enabled True -Profile Any | Out-Null
-Write-Host "  Allowed: NxProxy.exe outbound DNS (TCP/UDP 53) to any"
-
-# BLOCK outbound DNS for BUILTIN\Users only (LocalSystem exempt)
+# BLOCK: Outbound DNS for BUILTIN\Users only (TCP + UDP 53)
 $usersSDDL = "D:(A;;CC;;;S-1-5-32-545)"
+
 New-NetFirewallRule -DisplayName "$rulePrefix - Block Users DNS (UDP)" -Direction Outbound -Action Block -Protocol UDP -RemotePort 53 -LocalUser $usersSDDL -Enabled True -Profile Any | Out-Null
 New-NetFirewallRule -DisplayName "$rulePrefix - Block Users DNS (TCP)" -Direction Outbound -Action Block -Protocol TCP -RemotePort 53 -LocalUser $usersSDDL -Enabled True -Profile Any | Out-Null
 Write-Host "  Blocked: BUILTIN\Users outbound DNS (TCP/UDP 53)"
+Write-Host "  NxProxy (LocalSystem) is automatically exempt"
 
-# BLOCK known DoH provider IPs on 443
+# BLOCK: Known DoH provider IPs on 443 (all users)
 $dohIPs = @("8.8.8.8","8.8.4.4","1.1.1.1","1.0.0.1","9.9.9.9","149.112.112.112","208.67.222.222","208.67.220.220","94.140.14.14","94.140.15.15","185.228.168.9","185.228.169.9")
 New-NetFirewallRule -DisplayName "$rulePrefix - Block DoH Providers (HTTPS)" -Direction Outbound -Action Block -Protocol TCP -RemotePort 443 -RemoteAddress $dohIPs -Enabled True -Profile Any | Out-Null
 Write-Host "  Blocked: Known DoH provider IPs on port 443 ($($dohIPs.Count) IPs)"
@@ -229,27 +218,19 @@ if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
         Write-Warning "  Could not configure AppIDSvc: $_"
     }
 
-    # Build XML without here-string to avoid indentation issues
+    # Build AppLocker XML via string concatenation (avoids here-string indentation issues)
     $xml = '<?xml version="1.0" encoding="UTF-8"?>'
     $xml += '<AppLockerPolicy Version="1">'
     $xml += '<RuleCollection Type="Exe" EnforcementMode="Enabled">'
-    # Admins: unrestricted
     $xml += '<FilePathRule Id="921cc481-6e17-4653-8f75-050b80acca20" Name="All files for Administrators" Description="Allow Administrators to run all executables." UserOrGroupSid="S-1-5-32-544" Action="Allow"><Conditions><FilePathCondition Path="*" /></Conditions></FilePathRule>'
-    # Users: Windows
     $xml += '<FilePathRule Id="a61c8b2c-a319-4cd0-9690-d2177cad7b51" Name="Windows system files" Description="Allow Users to run from Windows." UserOrGroupSid="S-1-5-32-545" Action="Allow"><Conditions><FilePathCondition Path="%WINDIR%\*" /></Conditions></FilePathRule>'
-    # Users: Program Files
     $xml += '<FilePathRule Id="d754b869-d2cc-46af-9c94-6b6e8c10d095" Name="Program Files" Description="Allow Users to run from Program Files." UserOrGroupSid="S-1-5-32-545" Action="Allow"><Conditions><FilePathCondition Path="%PROGRAMFILES%\*" /></Conditions></FilePathRule>'
-    # Users: Program Files (x86)
     $xml += '<FilePathRule Id="e2c0a7f8-51d3-4a9b-bf12-8c7e6d5a4b30" Name="Program Files (x86)" Description="Allow Users to run from Program Files (x86)." UserOrGroupSid="S-1-5-32-545" Action="Allow"><Conditions><FilePathCondition Path="%OSDRIVE%\Program Files (x86)\*" /></Conditions></FilePathRule>'
-    # Users: WhatsApp
     $xml += '<FilePathRule Id="f3b3c1a0-7d44-4e2a-b8d6-1a2b3c4d5e6f" Name="WhatsApp Desktop" Description="Allow WhatsApp from AppData." UserOrGroupSid="S-1-5-32-545" Action="Allow"><Conditions><FilePathCondition Path="%LOCALAPPDATA%\WhatsApp\*" /></Conditions></FilePathRule>'
-    # Users: WindowsApps
     $xml += '<FilePathRule Id="b2e60a27-f316-4752-b3c6-2a1d4e8f9c0b" Name="WindowsApps" Description="Allow WindowsApps system components." UserOrGroupSid="S-1-5-32-545" Action="Allow"><Conditions><FilePathCondition Path="%PROGRAMFILES%\WindowsApps\*" /></Conditions></FilePathRule>'
     $xml += '</RuleCollection>'
     $xml += '<RuleCollection Type="Msi" EnforcementMode="Enabled">'
-    # Admins: all MSI
     $xml += '<FilePathRule Id="64ad46ff-0d71-4fa0-a30b-3f3d30c5433d" Name="All MSI for Administrators" Description="Allow Administrators all MSI." UserOrGroupSid="S-1-5-32-544" Action="Allow"><Conditions><FilePathCondition Path="*" /></Conditions></FilePathRule>'
-    # Users: Windows Installer
     $xml += '<FilePathRule Id="b7af7102-efde-4369-8a89-7a6a392d1473" Name="Windows Installer files" Description="Allow MSI from Windows Installer dir." UserOrGroupSid="S-1-5-32-545" Action="Allow"><Conditions><FilePathCondition Path="%WINDIR%\Installer\*" /></Conditions></FilePathRule>'
     $xml += '</RuleCollection>'
     $xml += '</AppLockerPolicy>'
@@ -283,7 +264,7 @@ Write-Host ""
 Write-Host "  Layer 1: DNS forced to 127.0.0.1 on ALL NICs        [DONE]" -ForegroundColor Green
 Write-Host "  Layer 2: DNS registry keys locked (admin-exempt)     [DONE]" -ForegroundColor Green
 Write-Host "  Layer 3: DoH disabled (Chrome/Edge/Firefox/Opera)    [DONE]" -ForegroundColor Green
-Write-Host "  Layer 4: Firewall (NxProxy exempt, users blocked)    [DONE]" -ForegroundColor Green
+Write-Host "  Layer 4: Firewall (users blocked, SYSTEM exempt)     [DONE]" -ForegroundColor Green
 Write-Host "  Layer 5: NxProxy service hardened + auto-recovery    [DONE]" -ForegroundColor Green
 Write-Host "  Layer 6: AppLocker active (block unauthorized exe)   [DONE]" -ForegroundColor Green
 Write-Host ""
