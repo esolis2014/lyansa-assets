@@ -186,14 +186,19 @@ Write-Host "  Layer 4 complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "=== LAYER 5: Hardening NxProxy service ===" -ForegroundColor Green
 
-# Set startup type and failure recovery BEFORE locking down the DACL
+# Reset DACL to permissive default first (in case a previous run locked it)
+$defaultDacl = 'D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)'
+& sc.exe sdset $NxProxyServiceName $defaultDacl 2>$null | Out-Null
+Write-Host "  Service DACL reset to default"
+
+# Now configure startup and recovery while we have full access
 Set-Service -Name $NxProxyServiceName -StartupType Automatic
 Write-Host "  Startup type: Automatic"
 
 & sc.exe failure $NxProxyServiceName reset= 86400 actions= restart/5000/restart/5000/restart/10000 | Out-Null
 Write-Host "  Service recovery: restart at 5s / 5s / 10s"
 
-# Harden DACL last — this restricts future modifications to SYSTEM and Admins only
+# Lock DACL down last — restricts future modifications to SYSTEM and Admins only
 $dacl = 'D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCLORC;;;IU)'
 & sc.exe sdset $NxProxyServiceName $dacl | Out-Null
 Write-Host "  Service DACL hardened: standard users can only query status"
