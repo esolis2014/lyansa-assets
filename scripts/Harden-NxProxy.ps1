@@ -197,34 +197,29 @@ Write-Host "  Layer 4 complete." -ForegroundColor Green
 Write-Host ""
 Write-Host "=== LAYER 5: Hardening NxProxy service ===" -ForegroundColor Green
 
-# Reset DACL to permissive default first (in case a previous run locked it)
-$defaultDacl = 'D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)'
-$resetResult = & sc.exe sdset $NxProxyServiceName $defaultDacl 2>&1
-Write-Host "  DACL reset: $resetResult"
-
-# Configure startup type using sc.exe (avoids Set-Service permission issues)
+# Configure startup type using sc.exe
 & sc.exe config $NxProxyServiceName start= auto | Out-Null
 Write-Host "  Startup type: Automatic"
 
+# SCM failure recovery: restart on crash
 & sc.exe failure $NxProxyServiceName reset= 86400 actions= restart/5000/restart/5000/restart/10000 | Out-Null
 Write-Host "  Service recovery (SCM): restart at 5s / 5s / 10s on crash"
 
-# Configure NSSM to restart even on clean stops
-$nssmPath = $nxProxySvc.PathName
-if ($nssmPath -and (Test-Path ($nssmPath -replace '"',''))) {
-    $nssm = $nssmPath -replace '"',''
-    & "$nssm" set $NxProxyServiceName AppExit Default Restart 2>&1 | Out-Null
-    & "$nssm" set $NxProxyServiceName AppRestartDelay 5000 2>&1 | Out-Null
+# NSSM restart: also restart on clean stops (sc stop, Stop-Service, etc.)
+$nssmPath = ($nxProxySvc.PathName -replace '"','').Trim()
+if ($nssmPath -and (Test-Path $nssmPath)) {
+    $exitResult = & "$nssmPath" set $NxProxyServiceName AppExit Default Restart 2>&1
+    $delayResult = & "$nssmPath" set $NxProxyServiceName AppRestartDelay 5000 2>&1
     Write-Host "  Service recovery (NSSM): restart on any exit, 5s delay"
 } else {
-    Write-Warning "  NSSM executable not found at service path. NSSM restart not configured."
-    Write-Warning "  Manual config: nssm set NxProxy AppExit Default Restart"
+    Write-Warning "  NSSM executable not found. Configure manually:"
+    Write-Warning "    nssm set NxProxy AppExit Default Restart"
+    Write-Warning "    nssm set NxProxy AppRestartDelay 5000"
 }
 
-# Lock DACL down last — restricts future modifications to SYSTEM and Admins only
-$dacl = 'D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCLORC;;;IU)'
-& sc.exe sdset $NxProxyServiceName $dacl | Out-Null
-Write-Host "  Service DACL hardened: standard users can only query status"
+# NOTE: Service DACL is left at Windows default. Standard users already cannot
+# stop/start/modify services — custom DACL hardening is unnecessary and causes
+# issues with sc.exe and NSSM on re-runs.
 
 Write-Host "  Layer 5 complete." -ForegroundColor Green
 
@@ -295,7 +290,7 @@ Write-Host "  Layer 1: DNS forced to 127.0.0.1 on ALL NICs        [DONE]" -Foreg
 Write-Host "  Layer 2: DNS registry keys locked (admin-exempt)     [DONE]" -ForegroundColor Green
 Write-Host "  Layer 3: DoH disabled (Chrome/Edge/Firefox/Opera)    [DONE]" -ForegroundColor Green
 Write-Host "  Layer 4: Firewall (users blocked, SYSTEM exempt)     [DONE]" -ForegroundColor Green
-Write-Host "  Layer 5: NxProxy service hardened + auto-recovery    [DONE]" -ForegroundColor Green
+Write-Host "  Layer 5: NxProxy service auto-start + auto-recovery [DONE]" -ForegroundColor Green
 Write-Host "  Layer 6: AppLocker active (block unauthorized exe)   [DONE]" -ForegroundColor Green
 Write-Host ""
 Write-Host "  REBOOT RECOMMENDED to ensure all policies take effect." -ForegroundColor Yellow
