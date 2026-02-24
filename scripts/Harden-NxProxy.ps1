@@ -93,12 +93,23 @@ foreach ($ifKey in $ifKeys) {
         $acl = Get-Acl -Path $keyPath
         $acl.SetAccessRuleProtection($true, $false)
 
+        # SYSTEM — Full Control
         $sysRule = New-Object System.Security.AccessControl.RegistryAccessRule("NT AUTHORITY\SYSTEM","FullControl","ContainerInherit,ObjectInherit","None","Allow")
         $acl.AddAccessRule($sysRule)
 
+        # Administrators — Full Control
         $admRule = New-Object System.Security.AccessControl.RegistryAccessRule("BUILTIN\Administrators","FullControl","ContainerInherit,ObjectInherit","None","Allow")
         $acl.AddAccessRule($admRule)
 
+        # LOCAL SERVICE — Full Control (DHCP client runs as this account)
+        $localSvcRule = New-Object System.Security.AccessControl.RegistryAccessRule("NT AUTHORITY\LOCAL SERVICE","FullControl","ContainerInherit,ObjectInherit","None","Allow")
+        $acl.AddAccessRule($localSvcRule)
+
+        # NETWORK SERVICE — Full Control (network components need this)
+        $netSvcRule = New-Object System.Security.AccessControl.RegistryAccessRule("NT AUTHORITY\NETWORK SERVICE","FullControl","ContainerInherit,ObjectInherit","None","Allow")
+        $acl.AddAccessRule($netSvcRule)
+
+        # Users — Read Only (cannot change DNS settings)
         $usrRule = New-Object System.Security.AccessControl.RegistryAccessRule("BUILTIN\Users","ReadKey","ContainerInherit,ObjectInherit","None","Allow")
         $acl.AddAccessRule($usrRule)
 
