@@ -258,6 +258,12 @@ if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
     $xml += '<FilePathRule Id="64ad46ff-0d71-4fa0-a30b-3f3d30c5433d" Name="All MSI for Administrators" Description="Allow Administrators all MSI." UserOrGroupSid="S-1-5-32-544" Action="Allow"><Conditions><FilePathCondition Path="*" /></Conditions></FilePathRule>'
     $xml += '<FilePathRule Id="b7af7102-efde-4369-8a89-7a6a392d1473" Name="Windows Installer files" Description="Allow MSI from Windows Installer dir." UserOrGroupSid="S-1-5-32-545" Action="Allow"><Conditions><FilePathCondition Path="%WINDIR%\Installer\*" /></Conditions></FilePathRule>'
     $xml += '</RuleCollection>'
+    # Appx/Packaged apps: Start Menu, Settings, Search, Cortana, etc. are all UWP apps.
+    # Without this rule collection, Windows 11 shell breaks completely.
+    $xml += '<RuleCollection Type="Appx" EnforcementMode="Enabled">'
+    # Everyone: allow all signed packaged apps (default Microsoft rule)
+    $xml += '<FilePublisherRule Id="a9e18c21-ff8f-43cf-b9fc-db40eed693ba" Name="All signed packaged apps" Description="Allow all users to run signed packaged apps." UserOrGroupSid="S-1-1-0" Action="Allow"><Conditions><FilePublisherCondition PublisherName="*" ProductName="*" BinaryName="*"><BinaryVersionRange LowSection="0.0.0.0" HighSection="*" /></FilePublisherCondition></Conditions></FilePublisherRule>'
+    $xml += '</RuleCollection>'
     $xml += '</AppLockerPolicy>'
 
     $policyFile = Join-Path $env:TEMP "NxProxy-AppLocker-Policy.xml"
