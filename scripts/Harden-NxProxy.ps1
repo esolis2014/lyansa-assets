@@ -1,4 +1,3 @@
-#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     NxProxy DNS Hardening Script — Forces all non-admin users through NxProxy DNS filtering.
@@ -12,8 +11,10 @@
     Layer 6: AppLocker — block unauthorized executables for standard users
 
 .NOTES
-    Run once as Administrator. Reboot recommended after execution.
-    Target OS: Windows 11 LTSC
+    Launch via Harden-NxProxy.bat (recommended) or run manually:
+      powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Harden-NxProxy.ps1
+
+    Target OS: Windows 11 LTSC (compatible with PowerShell 3.0+)
     NxProxy must already be installed as a native Windows service listening on 127.0.0.1:53
 
 .PARAMETER NxProxyServiceName
@@ -31,8 +32,34 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# --- Resolve NxProxy executable path ---
-$nxProxySvc = Get-CimInstance Win32_Service -Filter "Name='$NxProxyServiceName'" -ErrorAction Stop
+# =============================================================================
+# PRE-FLIGHT CHECKS
+# =============================================================================
+
+# --- Check Administrator privileges ---
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+)
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Error "This script must be run as Administrator. Right-click PowerShell and select 'Run as Administrator', or use Harden-NxProxy.bat."
+    exit 1
+}
+
+# --- Check PowerShell version ---
+if ($PSVersionTable.PSVersion.Major -lt 3) {
+    Write-Error "This script requires PowerShell 3.0 or later. Current version: $($PSVersionTable.PSVersion). Please update PowerShell."
+    exit 1
+}
+Write-Host "PowerShell version: $($PSVersionTable.PSVersion)" -ForegroundColor Cyan
+
+# --- Resolve NxProxy executable path (CIM with WMI fallback) ---
+$nxProxySvc = $null
+if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+    $nxProxySvc = Get-CimInstance Win32_Service -Filter "Name='$NxProxyServiceName'" -ErrorAction SilentlyContinue
+} else {
+    $nxProxySvc = Get-WmiObject Win32_Service -Filter "Name='$NxProxyServiceName'" -ErrorAction SilentlyContinue
+}
+
 if (-not $nxProxySvc) {
     Write-Error "Service '$NxProxyServiceName' not found. Ensure NxProxy is installed before running this script."
     exit 1
@@ -52,11 +79,12 @@ if (-not (Test-Path $NxProxyExePath)) {
     exit 1
 }
 Write-Host "NxProxy executable: $NxProxyExePath" -ForegroundColor Cyan
+Write-Host ""
 
 # =============================================================================
 # LAYER 1 — Force DNS to NxProxy on ALL NICs (active and inactive)
 # =============================================================================
-Write-Host "`n=== LAYER 1: Forcing DNS to $DnsServer on all adapters ===" -ForegroundColor Green
+Write-Host "=== LAYER 1: Forcing DNS to $DnsServer on all adapters ===" -ForegroundColor Green
 
 $adapters = Get-NetAdapter
 if (-not $adapters) {
@@ -261,13 +289,25 @@ Write-Host "  Layer 5 complete." -ForegroundColor Green
 # =============================================================================
 Write-Host "`n=== LAYER 6: Configuring AppLocker ===" -ForegroundColor Green
 
-# Ensure AppIDSvc (Application Identity) is running and set to auto
-Set-Service -Name "AppIDSvc" -StartupType Automatic -ErrorAction SilentlyContinue
-Start-Service -Name "AppIDSvc" -ErrorAction SilentlyContinue
-Write-Host "  AppIDSvc set to Automatic and started"
+# Check if AppLocker cmdlets are available
+if (-not (Get-Command Set-AppLockerPolicy -ErrorAction SilentlyContinue)) {
+    Write-Warning "  AppLocker cmdlets not available. This may require Windows Enterprise/Education/LTSC."
+    Write-Warning "  Skipping Layer 6. All other layers are active."
+} else {
 
-# Build AppLocker policy XML
-$appLockerPolicyXml = @'
+    # Ensure AppIDSvc (Application Identity) is running and set to auto
+    try {
+        Set-Service -Name "AppIDSvc" -StartupType Automatic
+        Start-Service -Name "AppIDSvc" -ErrorAction SilentlyContinue
+        Write-Host "  AppIDSvc set to Automatic and started"
+    }
+    catch {
+        Write-Warning "  Could not configure AppIDSvc: $_"
+        Write-Warning "  AppLocker may not function without this service."
+    }
+
+    # Build AppLocker policy XML
+    $appLockerPolicyXml = @'
 <AppLockerPolicy Version="1">
   <RuleCollection Type="Exe" EnforcementMode="Enabled">
 
@@ -359,26 +399,33 @@ $appLockerPolicyXml = @'
 </AppLockerPolicy>
 '@
 
-# Write policy to temp file and import
-$policyFile = "$env:TEMP\NxProxy-AppLocker-Policy.xml"
-$appLockerPolicyXml | Out-File -FilePath $policyFile -Encoding UTF8 -Force
+    # Write policy to temp file and import
+    $policyFile = Join-Path $env:TEMP "NxProxy-AppLocker-Policy.xml"
+    $appLockerPolicyXml | Out-File -FilePath $policyFile -Encoding UTF8 -Force
 
-# Import AppLocker policy (replaces any existing policy)
-Set-AppLockerPolicy -XmlPolicy $policyFile -ErrorAction Stop
-Write-Host "  AppLocker policy applied:"
-Write-Host "    Allowed for Users: Windows, Program Files, Program Files (x86), WhatsApp, WindowsApps"
-Write-Host "    Blocked for Users: Downloads, Desktop, AppData (except WhatsApp), USB, all other paths"
-Write-Host "    Administrators: unrestricted"
+    # Import AppLocker policy (replaces any existing policy)
+    try {
+        Set-AppLockerPolicy -XmlPolicy $policyFile -ErrorAction Stop
+        Write-Host "  AppLocker policy applied:"
+        Write-Host "    Allowed for Users: Windows, Program Files, Program Files (x86), WhatsApp, WindowsApps"
+        Write-Host "    Blocked for Users: Downloads, Desktop, AppData (except WhatsApp), USB, all other paths"
+        Write-Host "    Administrators: unrestricted"
+    }
+    catch {
+        Write-Warning "  Failed to apply AppLocker policy: $_"
+    }
 
-# Clean up temp file
-Remove-Item -Path $policyFile -Force -ErrorAction SilentlyContinue
+    # Clean up temp file
+    Remove-Item -Path $policyFile -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host "  Layer 6 complete." -ForegroundColor Green
 
 # =============================================================================
 # SUMMARY
 # =============================================================================
-Write-Host "`n=============================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host "  NxProxy DNS Hardening — Complete" -ForegroundColor Cyan
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host ""
