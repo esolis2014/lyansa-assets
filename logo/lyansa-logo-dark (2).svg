@@ -1,27 +1,18 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg version="1.1" xmlns="http://www.w3.org/2000/svg"
- width="3278" height="1349" viewBox="-250 -250 3278 1349">
-  <!--
-    No background rect = transparent.
-    viewBox padded 250px on every side so the outline is never clipped.
-    Filter region is very generous (30% bleed on each side).
-    Pipeline:
-      1. Dilate SourceAlpha outward (radius 200 SVG units)
-      2. Slight Gaussian blur to round the corners
-      3. Snap back to hard edge via feComponentTransfer (keeps the roundness)
-      4. Flood white and mask to the dilated shape
-      5. Merge: white silhouette behind, black letters on top
-  -->
+ width="2778" height="849" viewBox="-315 -315 3408 1479">
+
   <defs>
-    <filter id="outline" x="-30%" y="-30%" width="160%" height="160%"
-            color-interpolation-filters="sRGB">
-      <feMorphology in="SourceAlpha" operator="dilate" radius="200" result="dilated"/>
-      <feGaussianBlur in="dilated" stdDeviation="30" result="blurred"/>
-      <feComponentTransfer in="blurred" result="hard">
-        <feFuncA type="discrete" tableValues="0 1"/>
+    <filter id="outline" x="-20%" y="-30%" width="140%" height="160%"
+            color-interpolation-filters="sRGB"
+            primitiveUnits="userSpaceOnUse">
+      <feMorphology in="SourceAlpha" operator="dilate" radius="250" result="dilated"/>
+      <feGaussianBlur in="dilated" stdDeviation="125" result="blurred"/>
+      <feComponentTransfer in="blurred" result="rounded">
+        <feFuncA type="linear" slope="150" intercept="-38"/>
       </feComponentTransfer>
       <feFlood flood-color="#ffffff" flood-opacity="1" result="white"/>
-      <feComposite in="white" in2="hard" operator="in" result="white-outline"/>
+      <feComposite in="white" in2="rounded" operator="in" result="white-outline"/>
       <feMerge>
         <feMergeNode in="white-outline"/>
         <feMergeNode in="SourceGraphic"/>
@@ -29,7 +20,6 @@
     </filter>
   </defs>
 
-  <!-- Black letters, filter produces the white outline around them -->
   <g transform="translate(0,849) scale(0.1,-0.1)"
      fill="#000000"
      filter="url(#outline)">
